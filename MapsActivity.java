@@ -1,16 +1,26 @@
 package com.jutcjm.jutc;
 
+import android.*;
 import android.app.ActionBar;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.Dialog;
 import android.app.FragmentTransaction;
+import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
+import android.location.Location;
+import android.location.LocationManager;
+import android.os.CountDownTimer;
 import android.os.Handler;
+import android.provider.Settings;
 import android.support.annotation.NonNull;
 import android.support.design.widget.BottomNavigationView;
 import android.support.design.widget.NavigationView;
+import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.Fragment;
 import android.support.v4.app.FragmentActivity;
 import android.os.Bundle;
@@ -34,12 +44,28 @@ import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
 
+import com.google.android.gms.maps.model.Polyline;
+import com.google.android.gms.maps.model.PolylineOptions;
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.database.ValueEventListener;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 public class MapsActivity extends AppCompatActivity implements OnMapReadyCallback,NavigationView.OnNavigationItemSelectedListener, BusCheckFragment.OnInputListener {
 
 
     private static final String TAG = "MapsActivity";
+    private static final int REQUEST_LOCATION = 1;
+    private static final double SPEED_LIMIT = 12;
+    public static final LatLng BUS_DEPOT = (new LatLng(18.012094,-76.798651));
 
     private GoogleMap mMap;
     private DrawerLayout mDrawerLayout;
@@ -55,6 +81,24 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
     //public MapsActivity (LatLng onePlace){
       //  aPlace = onePlace;
     //}
+    LocationManager locationManager;
+
+    private DatabaseReference displacementRef,routeRef,scheduleRef;
+    public List<Displacements> displacementsList,routeList;
+    public List<RouteTrip> scheduleList;
+
+    public double speedSum = 0,routeDistance,busDis,busCurSpeed, myLatti, myLongi,
+            busCurAvgSpeed,intervalTime, currentDistanceTravelled = 0,prevDistTrav;
+
+    public long timeTravelledThus, expectedTime;
+    public Date currentTime;
+    private BigDecimal lat, lon;
+    public String outputString = new String("..");
+    MarkerOptions personMarker;
+    MarkerOptions busMarker ;
+
+
+
 
     @Override
     public void sendInput(int num){
@@ -64,6 +108,7 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
         busNumber = num;
         if (busNumber != 0) {
             /// call function to search firebase
+            busSearchNumber(busNumber);
         }
     }
 
@@ -72,20 +117,25 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_maps);
 
+        ActivityCompat.requestPermissions(this, new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION}, REQUEST_LOCATION);
+
         mDrawerLayout = (DrawerLayout) findViewById(R.id.drawerLayout);
         mToggle = new ActionBarDrawerToggle(this, mDrawerLayout,R.string.open,R.string.close);
 
         mDrawerLayout.addDrawerListener(mToggle);
         mToggle.syncState();
 
-
         getSupportActionBar().setDisplayHomeAsUpEnabled(true);
         getSupportActionBar().setTitle(Html.fromHtml("<font color=\"black\">" + getString(R.string.app_name) + "</font>"));
 
-        passengerPointer = new LatLng(18.011079, -76.742613);
+        //passengerPointer = new LatLng(18.060550, -76.794140);
+        busPointer = BUS_DEPOT;
 
         navigationView = (NavigationView) findViewById(R.id.navigationView);
         navigationView.setNavigationItemSelectedListener(this);
+
+        personMarker = new MarkerOptions();
+        busMarker = new MarkerOptions();
 
         // Obtain the SupportMapFragment and get notified when the map is ready to be used.
         mapFragment = (SupportMapFragment) getSupportFragmentManager().findFragmentById(R.id.map);
@@ -100,6 +150,81 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
             }
         }*/
 
+    // getting input from firebase
+
+        displacementsList = new ArrayList<>();
+        routeList = new ArrayList<>();
+        scheduleList = new ArrayList<>();
+        speedSum += SPEED_LIMIT;
+
+        // Get a reference to our posts
+        displacementRef = FirebaseDatabase.getInstance().getReference("displacements");
+        routeRef = FirebaseDatabase.getInstance().getReference("routes");
+        scheduleRef = FirebaseDatabase.getInstance().getReference("schedule");
+        currentTime = Calendar.getInstance().getTime();
+
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        //      Attach a listener to read the data at our posts reference
+        routeRef.addValueEventListener(new ValueEventListener() {
+            @Override
+            public void onDataChange(DataSnapshot dataSnapshot) {
+
+                routeList.clear();
+                for(DataSnapshot routeSnapshot : dataSnapshot.getChildren()){
+
+                    Displacements routeDetails = routeSnapshot.getValue(Displacements.class);
+                    routeList.add(routeDetails);
+                }
+            }
+            @Override
+            public void onCancelled(DatabaseError databaseError) {
+                System.out.println("The read failed: " + databaseError.getCode());
+            }
+        });
+
+        displacementRef.addValueEventListener(new ValueEventListener() {
+            @Override
+            public void onDataChange(DataSnapshot dataSnapshot) {
+
+                displacementsList.clear();
+                for(DataSnapshot routeSnapshot : dataSnapshot.getChildren()){
+
+                    Displacements displacementDetails = routeSnapshot.getValue(Displacements.class);
+                    displacementsList.add(displacementDetails);
+                }
+
+                if ( busNumber != 0){
+                    busSearchNumber(busNumber);
+                }
+            }
+            @Override
+            public void onCancelled(DatabaseError databaseError) {
+                System.out.println("The read failed: " + databaseError.getCode());
+            }
+
+
+        });
+
+        scheduleRef.addValueEventListener(new ValueEventListener() {
+            @Override
+            public void onDataChange(DataSnapshot dataSnapshot) {
+
+                scheduleList.clear();
+                for(DataSnapshot routeSnapshot : dataSnapshot.getChildren()){
+
+                    RouteTrip scheduleDetail = routeSnapshot.getValue(RouteTrip.class);
+                    scheduleList.add(scheduleDetail);
+                }
+            }
+            @Override
+            public void onCancelled(DatabaseError databaseError) {
+                System.out.println("The read failed: " + databaseError.getCode());
+            }
+        });
     }
 
     @Override
@@ -123,27 +248,41 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
     public void onMapReady(GoogleMap googleMap) {
         mMap = googleMap;
 
-        MarkerOptions personMarker = new MarkerOptions();
-        MarkerOptions busMarker = new MarkerOptions();
+        locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        if (!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            buildAlertMessageNoGps();
 
-        busMarker.position(busPointer).title("Current Bus Location");
-        busMarker.icon(BitmapDescriptorFactory.fromResource(R.mipmap.ic_directions_bus_black_24dp));
+        } else if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
 
-        personMarker.position(passengerPointer).title("My Location");
-        personMarker.icon(BitmapDescriptorFactory.fromResource(R.drawable.twotone_directions_walk_black_18dp));
-
-        mMap.addMarker(busMarker);
-        mMap.addMarker(personMarker);
-
-        mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(passengerPointer, 17.0f));
-
-        try {
-            TimeUnit.SECONDS.sleep(10);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
+            getLocation(); //passengerPointer = device location
         }
 
-        mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(busPointer, 17.0f));
+        if (busPointer == BUS_DEPOT){
+            busMarker.position(busPointer).title("Buses are at the BUS-PARK");
+        }else {
+            busMarker.position(busPointer).title("Current Bus Location");
+        }
+        busMarker.icon(BitmapDescriptorFactory.fromResource(R.mipmap.ic_directions_bus_black_24dp));
+
+        personMarker.position(passengerPointer).title("This is Your Location");
+        personMarker.icon(BitmapDescriptorFactory.fromResource(R.drawable.twotone_directions_walk_black_18dp));
+
+
+        mMap.addMarker(personMarker).showInfoWindow();
+        mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(passengerPointer, 16.0f));
+
+        new CountDownTimer(7000,100){
+            public void onTick(long millisUntilFinished){
+
+            }
+            public void onFinish(){
+                mMap.addMarker(busMarker).showInfoWindow();
+                mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(busPointer, 16.0f));
+
+            }
+        }.start();
+
+
     }
 
     /*@Override
@@ -165,7 +304,15 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
             //fragmentTransaction.replace(R.id.map,new BusCheckFragment());
             //fragmentTransaction.commit();
 
-            busPointer = new LatLng(18.017934, -76.792001);
+           /* locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+            if (!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                buildAlertMessageNoGps();
+
+            } else if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                getLocation();
+            }
+            */
+
             BusCheckFragment dialog = new BusCheckFragment();
             dialog.show(getSupportFragmentManager(),"MyCustomDialog1");
 
@@ -186,5 +333,204 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
         return true;
     }
 
+    private void getLocation() {
+        if (ActivityCompat.checkSelfPermission(MapsActivity.this, android.Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission
+                (MapsActivity.this, android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+
+            ActivityCompat.requestPermissions(MapsActivity.this, new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION}, REQUEST_LOCATION);
+
+        } else {
+            Location location = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+
+            Location location1 = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+
+            Location location2 = locationManager.getLastKnownLocation(LocationManager. PASSIVE_PROVIDER);
+
+            if (location != null) {
+                myLatti = location.getLatitude();
+                myLongi = location.getLongitude();
+
+            } else  if (location1 != null) {
+
+                myLatti = location.getLatitude();
+                myLongi = location.getLongitude();
+
+            } else  if (location2 != null) {
+                myLatti = location.getLatitude();
+                myLongi = location.getLongitude();
+
+            }else{
+
+                Toast.makeText(this,"Unable to Trace your location",Toast.LENGTH_SHORT).show();
+
+            }
+        }
+
+        passengerPointer = new LatLng(myLatti, myLongi);
+    }
+
+    protected void buildAlertMessageNoGps() {
+
+        final AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setMessage("Please Turn ON your GPS Connection")
+                .setCancelable(false)
+                .setPositiveButton("Yes", new DialogInterface.OnClickListener() {
+                    public void onClick(final DialogInterface dialog, final int id) {
+                        startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS));
+                    }
+                })
+                .setNegativeButton("No", new DialogInterface.OnClickListener() {
+                    public void onClick(final DialogInterface dialog, final int id) {
+                        dialog.cancel();
+                    }
+                });
+        final AlertDialog alert = builder.create();
+        alert.show();
+    }
+
+    public void isBefitting(double prevDist, double totalDistance,
+                            long timeThus,long prevTime, double curDisTrav, double avgBusSpeed){
+
+        double prevDistanceLeft = totalDistance - prevDist;
+        long prevTimeLeft = (long) (prevDistanceLeft / (prevDist/prevTime));
+
+        double distanceLeft = totalDistance - curDisTrav;
+        long timeLeft = (long) (distanceLeft / avgBusSpeed);
+
+
+        Toast.makeText(this," expected time left for bus: "+ timeLeft,Toast.LENGTH_LONG).show();
+        long diff = prevTimeLeft - timeLeft;
+
+        String testing = new String ();
+
+        if (diff == (timeThus-prevTime)){//(calculatedTime == (expectingTime - timeThus)){
+
+            Toast.makeText(this,"Bus on perfect timing",Toast.LENGTH_LONG).show();
+
+        }else if(diff < (timeThus-prevTime)){//(calculatedTime > (expectingTime - timeThus)){
+
+            // increase time to (stopwatch) because bus is decreasing its speed (it will take longer to reach now)
+
+            long stopWatchChange = diff - (timeThus-prevTime);
+            testing = "prevExpectedTime: " + prevTimeLeft + " expTime:  " + timeLeft + " timeThus: "
+                    + timeThus + " real diff: " + diff;
+            Toast.makeText(this,"Bus is running Late .... " + testing,Toast.LENGTH_LONG).show();
+
+        }else if(diff > (timeThus-prevTime)){//(calculatedTime < (expectingTime - timeThus)){
+
+            // decrease time to (stopwatch) because bus is increasing its speed (will reach faster)
+
+            long stopWatchChange = diff - (timeThus-prevTime);
+            testing = "prevExpectedTime: " + prevTimeLeft + " expTime:  " + timeLeft + " timeThus: "
+                    + timeThus + " real diff: " + diff;
+            Toast.makeText(this,"Bus is ahead of schedule .... " + testing,Toast.LENGTH_LONG).show();
+
+        }
+        expectedTime = timeLeft;
+    }
+
+
+    public void busSearchNumber(int aBusNumber) {
+
+        for (int i = 0; i < routeList.size(); i++) {
+            if (routeList.get(i).getBusNumber() == aBusNumber) {
+
+                routeDistance = routeList.get(i).getDistance();
+            }
+        }
+
+        int fleetNum = 0;
+        List<Displacements> aMovingBus = new ArrayList<>();
+
+        for (int j = 0; j < scheduleList.size(); j++) {
+            if (scheduleList.get(j).getBusNumber() == aBusNumber) { // and scheduleList.get(j).getEndtime > currentTime
+                fleetNum = (scheduleList.get(j).getFleetNumber());
+            }
+
+        }
+
+        for (int p = 0 ; p < displacementsList.size() ; p++ ){
+            //Toast.makeText(this,"the bus was at .... " + displacementsList.get(p).getPoints().getLatti() +
+            //        " , "+displacementsList.get(p).getPoints().getLongi(),Toast.LENGTH_LONG).show();
+            if (displacementsList.get(p).getFleetNumber() == fleetNum){
+                aMovingBus.add(displacementsList.get(p));
+            }
+        }
+
+        int k = aMovingBus.size();
+        List<PolylineOptions> polylinesOpt = new ArrayList<PolylineOptions>();
+        List<Polyline> polylines = new ArrayList<Polyline>();
+
+        if (k <= 1) {
+
+            outputString = "Bus is currently at the Depot";
+            busPointer = BUS_DEPOT;
+            for(Polyline line : polylines)
+            {
+                line.remove();
+            }
+
+            polylines.clear();
+            mMap.addMarker(busMarker).remove();
+
+        } else {
+
+            for (int j = 0; j < k - 1; j++) {
+
+                BigDecimal x1 = new BigDecimal(aMovingBus.get(j).getPoints().getLatti());
+                BigDecimal y1 = new BigDecimal(aMovingBus.get(j).getPoints().getLongi());
+                BigDecimal x2 = new BigDecimal(aMovingBus.get(j + 1).getPoints().getLatti());
+                BigDecimal y2 = new BigDecimal(aMovingBus.get(j + 1).getPoints().getLongi());
+                intervalTime = aMovingBus.get(j + 1).getTimeThus() - aMovingBus.get(j).getTimeThus();
+
+                //illustration of the simulation of bus moving.
+                PolylineOptions newOption = new PolylineOptions().add(new LatLng(Double.parseDouble(x1.toString())
+                        ,Double.parseDouble(y1.toString()))).add(new LatLng(Double.parseDouble(x2.toString())
+                        ,Double.parseDouble(y2.toString()))).width(7).color(Color.GREEN).geodesic(true);
+
+                // removing old marker
+                mMap.addMarker(busMarker).remove();
+
+                //mMap.addPolyline(newOption);
+                polylinesOpt.add(newOption);
+
+                //for(PolylineOptions z : polylinesOpt)
+                polylines.add(this.mMap.addPolyline(polylinesOpt.get(j)));
+
+
+                //mMap.addPolyline(polylinesOpt.get(j));
+
+                ///// Calculations made for optimization
+
+                busDis = Haversine.distance(x1, y1, x2, y2);
+                busCurSpeed = busDis / intervalTime;
+
+                speedSum += busCurSpeed;
+                prevDistTrav = currentDistanceTravelled;
+
+                currentDistanceTravelled += busDis;
+                busCurAvgSpeed = speedSum / (k);
+
+                lat = x2;
+                lon = y2;
+            }
+
+            timeTravelledThus = aMovingBus.get(k - 1).getTimeThus();
+            long prevTime = aMovingBus.get(k - 2).getTimeThus();
+
+            busPointer = new LatLng(Double.parseDouble(lat.toString()),Double.parseDouble(lon.toString()));
+            isBefitting(prevDistTrav, routeDistance, timeTravelledThus, prevTime, currentDistanceTravelled, busCurAvgSpeed);
+            outputString = "Bus is on the move";
+        }
+
+        //for(PolylineOptions poly : polylines)
+        //{
+            //polylines.add(this.mMap.addPolyline(new PolylineOptions()....));
+            //mMap.addPolyline(poly);
+        //}
+        Toast.makeText(this, outputString, Toast.LENGTH_LONG).show();
+        mapFragment.getMapAsync(this);
+    }
 
 }
