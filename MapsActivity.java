@@ -57,7 +57,6 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 public class MapsActivity extends AppCompatActivity implements OnMapReadyCallback,NavigationView.OnNavigationItemSelectedListener, BusCheckFragment.OnInputListener {
 
@@ -70,8 +69,7 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
     private GoogleMap mMap;
     private DrawerLayout mDrawerLayout;
     private ActionBarDrawerToggle mToggle;
-    public LatLng busPointer;
-    public LatLng passengerPointer;
+    public LatLng busPointer,prevLocation, passengerPointer,busStopPointer;
     public int busNumber = 0;
     public NavigationView navigationView;
     public SupportMapFragment mapFragment;
@@ -94,11 +92,9 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
     public Date currentTime;
     private BigDecimal lat, lon;
     public String outputString = new String("..");
-    MarkerOptions personMarker;
-    MarkerOptions busMarker ;
-
-
-
+    MarkerOptions personMarker,busMarker, busStopMarker;
+    List<MarkerOptions> busMarkerList;
+    public int token;
 
     @Override
     public void sendInput(int num){
@@ -136,25 +132,20 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
 
         personMarker = new MarkerOptions();
         busMarker = new MarkerOptions();
+        busStopMarker = new MarkerOptions();
 
         // Obtain the SupportMapFragment and get notified when the map is ready to be used.
-        mapFragment = (SupportMapFragment) getSupportFragmentManager().findFragmentById(R.id.map);
+        // mapFragment = (SupportMapFragment) getSupportFragmentManager().findFragmentById(R.id.map);
+        mapFragment = (SupportMapFragment) getSupportFragmentManager().findFragmentById(R.id.aMap);
         mapFragment.getMapAsync(this);
 
-/*        Bundle bundle = getIntent().getExtras();
-        if (bundle != null){
-            if (bundle.getString("busNumber1234") != null){
-                Toast.makeText(getApplicationContext(),
-                        "BusNumber choosen is: " + bundle.getString("busNumber1234"),
-                        Toast.LENGTH_LONG).show();
-            }
-        }*/
-
-    // getting input from firebase
+        // getting input from firebase
+        /*********************/
 
         displacementsList = new ArrayList<>();
         routeList = new ArrayList<>();
         scheduleList = new ArrayList<>();
+        busMarkerList = new ArrayList<>();
         speedSum += SPEED_LIMIT;
 
         // Get a reference to our posts
@@ -162,6 +153,7 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
         routeRef = FirebaseDatabase.getInstance().getReference("routes");
         scheduleRef = FirebaseDatabase.getInstance().getReference("schedule");
         currentTime = Calendar.getInstance().getTime();
+        token = 1;
 
     }
 
@@ -225,6 +217,9 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
                 System.out.println("The read failed: " + databaseError.getCode());
             }
         });
+
+        //// bus stop reference needed (bus stop name and matching coordinates)
+        /// and (place name and matching coordinates
     }
 
     @Override
@@ -248,6 +243,12 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
     public void onMapReady(GoogleMap googleMap) {
         mMap = googleMap;
 
+        for (MarkerOptions bm : busMarkerList){
+            mMap.addMarker(bm).remove();
+
+        }
+
+
         locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
         if (!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
             buildAlertMessageNoGps();
@@ -257,32 +258,70 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
             getLocation(); //passengerPointer = device location
         }
 
+
         if (busPointer == BUS_DEPOT){
             busMarker.position(busPointer).title("Buses are at the BUS-PARK");
         }else {
             busMarker.position(busPointer).title("Current Bus Location");
+
         }
         busMarker.icon(BitmapDescriptorFactory.fromResource(R.mipmap.ic_directions_bus_black_24dp));
 
         personMarker.position(passengerPointer).title("This is Your Location");
         personMarker.icon(BitmapDescriptorFactory.fromResource(R.drawable.twotone_directions_walk_black_18dp));
 
+        if ((passengerPointer == prevLocation) || (token == 10)){
+            Toast.makeText(this,"You are currently in the same location as before"+prevLocation,Toast.LENGTH_LONG).show();
 
-        mMap.addMarker(personMarker).showInfoWindow();
-        mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(passengerPointer, 16.0f));
+            new CountDownTimer(5000, 100) {
+                public void onTick(long millisUntilFinished) {
 
-        new CountDownTimer(7000,100){
-            public void onTick(long millisUntilFinished){
+                }
 
-            }
-            public void onFinish(){
-                mMap.addMarker(busMarker).showInfoWindow();
-                mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(busPointer, 16.0f));
+                public void onFinish() {
+                    mMap.addMarker(busMarker).showInfoWindow();
+                    busMarkerList.add(busMarker);
+                    mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(busPointer, 16.0f));
 
-            }
-        }.start();
+                }
+            }.start();
+
+        }else if (token == 1){
+            mMap.addMarker(personMarker).showInfoWindow();
+            mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(passengerPointer, 16.0f));
+            token = 10;
+
+            new CountDownTimer(5000, 100) {
+                public void onTick(long millisUntilFinished) {
+
+                }
+
+                public void onFinish() {
+                    mMap.addMarker(busMarker).showInfoWindow();
+                    busMarkerList.add(busMarker);
+                    mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(busPointer, 16.0f));
+
+                }
+            }.start();
 
 
+        } else if (token == 7){
+            Toast.makeText(this,"You are finding nearest busStop"+prevLocation,Toast.LENGTH_LONG).show();
+            busStopMarker.position(busStopPointer).title("This is the nearest Bus Stop");
+
+            mMap.addMarker(busStopMarker).showInfoWindow();
+            mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(busStopPointer,16.0f));
+
+
+        }else if (token == 5){
+            Toast.makeText(this,"You have requested your location only"+prevLocation,Toast.LENGTH_LONG).show();
+
+            mMap.addMarker(personMarker).showInfoWindow();
+            mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(passengerPointer, 16.0f));
+            token = 10;
+
+        }
+        prevLocation = new LatLng(myLatti, myLongi);
     }
 
     /*@Override
@@ -313,13 +352,29 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
             }
             */
 
+            token = 1;
             BusCheckFragment dialog = new BusCheckFragment();
             dialog.show(getSupportFragmentManager(),"MyCustomDialog1");
 
-        }else if (itemId == R.id.placeGoingTo){
+        }else if (itemId == R.id.myLocation){
+
+            token = 5;
+            Toast.makeText(this,"Finding Your Location",Toast.LENGTH_LONG).show();
+            mapFragment.getMapAsync(this);
+
+        } else if (itemId == R.id.placeGoingTo){
 
             busPointer =  new LatLng(18.011091, -76.797722);
             Toast.makeText(this,"Selected Place going to",Toast.LENGTH_LONG).show();
+            mapFragment.getMapAsync(this);
+
+        }else if (itemId == R.id.nearestBS){
+
+            //busPointer =  new LatLng(18.011091, -76.797722);
+            token = 7;
+
+            //getNearestBS(passengerPointer);
+            Toast.makeText(this,"Searching for nearest bus stop",Toast.LENGTH_LONG).show();
             mapFragment.getMapAsync(this);
 
         }else if (itemId == R.id.placeLeavingFrom){
@@ -430,6 +485,14 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
         expectedTime = timeLeft;
     }
 
+    public void getNearestBS(LatLng yourLocation){
+
+        /// get bus stop list and compute nearest bus stop
+        /// set busStopMarker to nearest BS
+
+
+    }
+
 
     public void busSearchNumber(int aBusNumber) {
 
@@ -460,19 +523,18 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
 
         int k = aMovingBus.size();
         List<PolylineOptions> polylinesOpt = new ArrayList<PolylineOptions>();
-        List<Polyline> polylines = new ArrayList<Polyline>();
+        //List<Polyline> polylines = new ArrayList<Polyline>();
 
         if (k <= 1) {
 
             outputString = "Bus is currently at the Depot";
-            busPointer = BUS_DEPOT;
-            for(Polyline line : polylines)
-            {
-                line.remove();
-            }
 
-            polylines.clear();
-            mMap.addMarker(busMarker).remove();
+            for(int ix = 0 ; ix < polylinesOpt.size();ix++)
+            {
+                mMap.addPolyline(polylinesOpt.get(ix)).remove();
+                mMap.addMarker(busMarkerList.get(ix)).remove();
+            }
+            polylinesOpt.clear();
 
         } else {
 
@@ -489,17 +551,9 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
                         ,Double.parseDouble(y1.toString()))).add(new LatLng(Double.parseDouble(x2.toString())
                         ,Double.parseDouble(y2.toString()))).width(7).color(Color.GREEN).geodesic(true);
 
-                // removing old marker
-                mMap.addMarker(busMarker).remove();
-
                 //mMap.addPolyline(newOption);
                 polylinesOpt.add(newOption);
-
-                //for(PolylineOptions z : polylinesOpt)
-                polylines.add(this.mMap.addPolyline(polylinesOpt.get(j)));
-
-
-                //mMap.addPolyline(polylinesOpt.get(j));
+                mMap.addPolyline(polylinesOpt.get(j));
 
                 ///// Calculations made for optimization
 
